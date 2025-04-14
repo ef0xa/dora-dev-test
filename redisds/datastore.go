@@ -14,7 +14,6 @@ import (
 
 type DataStore struct {
 	c *redis.Client
-	// TODO: implement me
 }
 
 func (d DataStore) SaveTick(ctx context.Context, tick data.Tick) error {
