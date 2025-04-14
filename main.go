@@ -31,7 +31,7 @@ func main() {
 	tickCh := make(chan data.Tick)
 	slog.Debug("starting tick generator")
 	go generator.GenerateTick(context.Background(), tickCh)
-	client, err := kgo.NewClient(
+	kafka, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
 	)
 	if err != nil {
@@ -39,15 +39,19 @@ func main() {
 	}
 
 	slog.Debug("building redis client")
-	var redisClient *redis.Client
-	{
-		redisClient = redis.NewClient(&redis.Options{Addr: ":6379"})
-	}
-	slog.Debug("redis client built")
 
-	con := consumer.NewConsumer(client, redisds.NewDataStore(redisClient))
-	con.Start(context.Background())
-	pub := publisher.NewTickPublisher(client, kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, nil))
+	slog.Debug("redis client built")
+	ctx, cancel := context.WithCancel(context.Background())
+	redisDataStore := redisds.NewDataStore(redis.NewClient(&redis.Options{Addr: ":6379"}))
+
+	defer cancel()
+	go consumer.Start(
+		ctx,
+		kafka,
+		redisDataStore.SaveTick,
+		"incoming_prices",
+	)
+	pub := publisher.NewTickPublisher(kafka, kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, nil))
 	pub.Start(context.Background(), tickCh, "incoming_prices")
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
@@ -57,6 +61,6 @@ func main() {
 	var opts []grpc.ServerOption
 
 	grpcServer := grpc.NewServer(opts...)
-	api.RegisterDoraDevTestServiceServer(grpcServer, service.NewService())
+	api.RegisterDoraDevTestServiceServer(grpcServer, service.NewService(redisDataStore.GetTicks))
 	log.Fatal(grpcServer.Serve(lis))
 }
